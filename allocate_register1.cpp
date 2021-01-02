@@ -168,9 +168,8 @@ void simple_allocated(MachineOperand *oper) {
 }
 
 #endif
-std::map<MachineInst*, int> number_all_inst(MachineFunc *f) {                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       
+std::map<MachineInst*, int> number_all_inst(MachineFunc *f, std::vector<MachineBB*> &all_bb) {                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       
       std::set<MachineBB*> visited;
-      std::vector<MachineBB*> all_bb;
       std::vector<MachineBB*> stack;
 
       stack.push_back(f->bb.head);
@@ -201,12 +200,12 @@ std::map<MachineInst*, int> number_all_inst(MachineFunc *f) {
       return num;
 
 } 
-void get_live_internal(std::map<MachineInst, int> &inst_number, std::map<MachineOperand*, int>& interval_start,std::map<MachineOperand*, int> &interval_end){
+void get_live_internal(std::map<MachineInst*, int> &inst_number, std::map<MachineOperand*, int>& interval_start,std::map<MachineOperand*, int> &interval_end, std::vector<MachineBB*> &bbs){
   std::map<MachineInst*, int>::iterator it = inst_number.begin();
   while(it != inst_number.end()){
-    MachineInst* tmp = it->first();
+    MachineInst* tmp = it->first;
     auto [def, use] = get_def_use_ptr(tmp);
-    if(interval_start.find(def) == nullptr){
+    if(interval_start.count(def) == 1){
       interval_start.insert(std::make_pair(def, inst_number[tmp]));
       interval_end.insert(std::make_pair(def, inst_number[tmp]));
     }
@@ -215,8 +214,9 @@ void get_live_internal(std::map<MachineInst, int> &inst_number, std::map<Machine
     }
     it++;
   }
-  for (MachineBB *bb = f->bb.head; bb; bb = bb->next) {
-        for (MachineInst *inst = bb->insts.tail; inst; inst = inst->prev) {
+   for(int i = 0;i < bbs.size();i++){
+        auto bb = bbs[i];
+        for(auto inst = bb->insts.head;inst;inst = inst->next){
           auto [def, use] = get_def_use_ptr(inst);
           for (MachineOperand* oper : use){
             if(interval_start[oper] > inst_number[inst]){
@@ -226,7 +226,6 @@ void get_live_internal(std::map<MachineInst, int> &inst_number, std::map<Machine
               interval_end[oper] = inst_number[inst];
             }
           }
-
         }
       }
 
@@ -243,10 +242,12 @@ void allocate_register(MachineProgram *p) {
       spilled_nodes.clear();
 
       // TODO : 你需要修改这一部分来确定给寄存器分配和染色。
-      std::map<MachineInst*, int> inst_number= number_all_inst(f);
+      std::vector<MachineBB*> bbs;
+      std::map<MachineInst*, int> inst_number= number_all_inst(f,bbs);
+      
       std::map<MachineOperand*, int> interval_start;
       std::map<MachineOperand*, int> interval_end;
-      get_live_internal(inst_number,interval_start,interval_end);
+      get_live_internal(inst_number,interval_start,interval_end,bbs);
       std::map<MachineOperand*, i32> allocated;
       std::map<i32,bool> empty_reg;
       for(int i = 4;i < 12;i++){
@@ -255,7 +256,7 @@ void allocate_register(MachineProgram *p) {
       std::map<MachineOperand, int>::iterator it2 = interval_start.begin();
       MachineOperand* min_end;
       while(it2 != interval_start.end()){
-        MachineInst* tmp = (it2->first());
+        MachineInst* tmp = (it2->first;
         if (tmp->state == MachineOperand::State::Virtual) {
           std::map<MachineOperand, i32>::iterator it_allocated = allocated.begin();
           min_end = it_allocated->first;
