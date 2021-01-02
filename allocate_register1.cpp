@@ -5,6 +5,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <queue>
 
 #include "../ir/cfg.hpp"
 
@@ -145,11 +146,91 @@ void liveness_analysis(MachineFunc *f) {
     }
   };
 }
+                                                                                                            
 
+#define SIMPLE_ALLOCATED_ALGORITHM
+// 最暴力的寄存器分配策略： 尝试为每一个变量分配一个寄存器，如果变量超过寄存器个数则直接放弃。
+#ifdef SIMPLE_ALLOCATED_ALGORITHM
+void simple_allocated(MachineOperand *oper) {
+  static int curid = 5;
+  static int maxid = 31;
+  static std::map<MachineOperand, i32> allocated;
+  if (oper->state == MachineOperand::State::Virtual) {
+    auto p = allocated.find(*oper);
+    int id;
+    if (p == allocated.end()) {
+      assert(curid < maxid);  // 如果我们无法为每一个变量分配一个寄存器，则直接panic..
+      id = allocated[*oper] = curid++;
+    }else id = p->second;
+    oper->state = MachineOperand::State::Allocated;
+    oper->value = id;
+  }
+}
 
-#define MY_ALLOCATED_ALGORITHM
+#endif
+std::map<MachineInst*, int> number_all_inst(MachineFunc *f) {                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       
+      std::set<MachineBB*> visited;
+      std::vector<MachineBB*> all_bb;
+      std::vector<MachineBB*> stack;
 
+      stack.push_back(f->bb.head);
+      visited.insert(f->bb.head);
+      while(!stack.empty()){
+        auto temp = stack[stack.size() - 1];
+        all_bb.push_back(temp);
+        stack.pop_back();
+        for(int i = 1;i >= 0;i--){
+          if(temp->succ[i] != nullptr && visited.find(temp->succ[i]) == visited.end()){
+            stack.push_back(temp->succ[i]);
+            visited.insert(temp->succ[i]);
+          }
+        }
+      }
 
+      std::map<MachineInst*,int> num;
+      int instnum = 0;
+
+      for(int i = 0;i < all_bb.size();i++){
+        auto bb = all_bb[i];
+        for(auto inst = bb->insts.head;inst;inst = inst->next){
+          instnum++;
+          int id = instnum;
+          num.insert(std::make_pair(inst,id));
+        }
+      }
+      return num;
+
+} 
+void get_live_internal(std::map<MachineInst, int> &inst_number, std::map<MachineOperand*, int>& interval_start,std::map<MachineOperand*, int> &interval_end){
+  std::map<MachineInst*, int>::iterator it = inst_number.begin();
+  while(it != inst_number.end()){
+    MachineInst* tmp = it->first();
+    auto [def, use] = get_def_use_ptr(tmp);
+    if(interval_start.find(def) == nullptr){
+      interval_start.insert(std::make_pair(def, inst_number[tmp]));
+      interval_end.insert(std::make_pair(def, inst_number[tmp]));
+    }
+    else{
+      interval_end[def] = inst_number[tmp];
+    }
+    it++;
+  }
+  for (MachineBB *bb = f->bb.head; bb; bb = bb->next) {
+        for (MachineInst *inst = bb->insts.tail; inst; inst = inst->prev) {
+          auto [def, use] = get_def_use_ptr(inst);
+          for (MachineOperand* oper : use){
+            if(interval_start[oper] > inst_number[inst]){
+              interval_start[oper] = inst_number[inst];
+            }
+            if(interval_end[oper] < inst_number[inst]){
+              interval_end[oper] = inst_number[inst];
+            }
+          }
+
+        }
+      }
+
+}
 // iterated register coalescing
 void allocate_register(MachineProgram *p) {
   for (auto f = p->func.head; f; f = f->next) {
@@ -161,245 +242,53 @@ void allocate_register(MachineProgram *p) {
       liveness_analysis(f);
       spilled_nodes.clear();
 
-    #ifdef MY_ALLOCATED_ALGORITHM
-      //对控制流图线性化并对每条指令编号
-      std::set<MachineBB*> visited;
-      std::vector<MachineBB*> dfs;
-      std::vector<MachineBB*> stack;
-
-      stack.push_back(f->bb.head);
-      visited.insert(f->bb.head);
-      while(!stack.empty()){
-        auto temp = stack[stack.size() - 1];
-        dfs.push_back(temp);
-        stack.pop_back();
-        for(int i = 1;i >= 0;i--){
-          if(temp->succ[i] != nullptr && visited.find(temp->succ[i]) == visited.end()){
-            stack.push_back(temp->succ[i]);
-            visited.insert(temp->succ[i]);
-          }
-        }
+      // TODO : 你需要修改这一部分来确定给寄存器分配和染色。
+      std::map<MachineInst*, int> inst_number= number_all_inst(f);
+      std::map<MachineOperand*, int> interval_start;
+      std::map<MachineOperand*, int> interval_end;
+      get_live_internal(inst_number,interval_start,interval_end);
+      std::map<MachineOperand*, i32> allocated;
+      std::map<i32,bool> empty_reg;
+      for(int i = 4;i < 12;i++){
+        empty_reg.insert(std::make_pair(i, true));
       }
+      std::map<MachineOperand, int>::iterator it2 = interval_start.begin();
+      MachineOperand* min_end;
+      while(it2 != interval_start.end()){
+        MachineInst* tmp = (it2->first());
+        if (tmp->state == MachineOperand::State::Virtual) {
+          std::map<MachineOperand, i32>::iterator it_allocated = allocated.begin();
+          min_end = it_allocated->first;
+          while(it_allocated != interval_start.end()){
+            MachineOperand* allocated_oper = it_allocated->first;
+            if(interval_end[allocated_oper] <= interval_start[tmp]){
+              allocated.erase(it_allocated);
+              empty_reg[allocated[allocated_oper]] = true;
+            }
+            if(interval_end[min_end] > interval_end[allocated_oper]){
+              min_end = allocated_oper;
+            }
+            it_allocated++;
+          }
+          //delete all finished operand
 
-      std::map<MachineInst*,int> inst2int;
-      int instnum = 0;
-
-      for(int i = 0;i < dfs.size();i++){
-        auto bb = dfs[i];
-        for(auto inst = bb->insts.head;inst;inst = inst->next){
-          instnum++;
-          int id = instnum;
-          inst2int.insert(std::make_pair(inst,id));
-        }
+          if(allocated.size == 8){
+            spilled_nodes.insert(min_end);
+            empty_reg[allocated[min_end]] = true;
+          }
+              tmp->state = MachineOperand::State::Allocated;
+              tmp->value = i; 
+              allocated.insert(std::make_pair(tmp, i));
+              empty_reg[i] = false;
+            }
+          }
       }
-
-      //计算live interval : inst 粒度
-      std::map<MachineOperand*,int> operand2start;
-      std::map<MachineOperand*,int> operand2end;
-      std::map<MachineOperand,i32> allocated;
-      std::map<MachineOperand,std::vector<MachineOperand*>> inverse_ptr;
-      std::vector<MachineOperand*> start_list;
-
-      for(int i = 0;i < dfs.size();i++){
-        auto bb = dfs[i];
-        for (MachineInst *inst = bb->insts.head; inst; inst = inst->next) {
-          auto [def, use] = get_def_use_ptr(inst);
-          if (def != nullptr){
-            operand2start.insert(std::make_pair(def,inst2int[inst]));
-            operand2end.insert(std::make_pair(def,inst2int[inst]));
-            start_list.push_back(def);
-            if(inverse_ptr.find(*def) == inverse_ptr.end()){
-              std::vector<MachineOperand*> temp;
-              temp.push_back(def);
-              inverse_ptr.insert(std::make_pair(*def,temp));
-            }
-            else{
-              //assert(inverse_ptr.find(*def) == inverse_ptr.end());
-              //看看是不是会有重复的def使用相同的virtual reg  //确实没报错，说明这一块并没有被执行
-              inverse_ptr.find(*def)->second.push_back(def);
-            }
-          }
-        }
+        it2++;
       }
-
-      for(int i = 0;i < dfs.size();i++){
-        auto bb = dfs[i];
-        auto live = bb->liveout;
-        for(auto inst = bb->insts.tail;inst; inst = inst->prev){
-          for(auto live_var = live.begin(); live_var != live.end();live_var++){
-            if(inverse_ptr.find(*live_var) != inverse_ptr.end()){
-              auto v = inverse_ptr.find(*live_var)->second;
-              for(int k = 0;k < v.size();k++){
-                if(operand2end.find(v[k]) != operand2end.end() && (operand2end.find(v[k])->second < inst2int[inst])){
-                  operand2end.find(v[k])->second = inst2int[inst];
-                }
-                if(operand2start.find(v[k]) != operand2start.end() && (operand2start.find(v[k])->second > inst2int[inst])){
-                  operand2start.find(v[k])->second = inst2int[inst];
-                }
-              }
-            }
-          }
-
-
-          auto [def, use] = get_def_use_ptr(inst);
-          if(def != nullptr){
-            live.erase(*def);
-          }
-          for (MachineOperand *oper : use){
-            live.insert(*oper);
-          }
-        }
-      }
-
-      //线性扫描法分配
-      // 4-12  bug：并非按头部顺序扫描
-      int used[13];
-      for(int i = 0;i < 13;i++){
-        used[i] = 0;
-      }
-
-      for(auto i = 0;i < dfs.size();i++){
-        auto bb = dfs[i];
-        for(auto inst = bb->insts.head;inst;inst = inst->next){
-          auto [def, use] = get_def_use_ptr(inst);
-          if((def != nullptr)&&((def->state == MachineOperand::State::Allocated) || (def->state == MachineOperand::State::PreColored))){
-            if(def->value < 13 && def->value >= 0){
-              used[def->value] = 1;
-            }
-          }
-          for (MachineOperand *oper : use){
-            if((oper->state == MachineOperand::State::Allocated) || (oper->state == MachineOperand::State::PreColored)){
-              if(oper->value < 13 && oper->value >= 0){
-                used[oper->value] = 1;
-              }
-            }
-          }
-        }
-      }
-
-      std::vector<MachineOperand*> active;
-      std::map<MachineOperand*,int> alloc;
-
-      for(int i = start_list.size() - 1;i > 0;i--){
-        for(int j = 0;j < i;j++){
-          auto a = start_list[j];
-          auto b = start_list[j + 1];
-          if(operand2start.find(a)->second > (operand2start.find(b)->second)){
-            start_list[j + 1] = a;
-            start_list[j] = b;
-          }
-        }
-      }
-
-      for(int i = 0;i < start_list.size();i++){
-        auto def = start_list[i];
-        if(def->state == MachineOperand::State::Virtual){
-          //expire old intervals
-          int expire = 0;
-          for(int k = 0;k < active.size();k++){
-            if(operand2end.find(active[k])->second >= (operand2start.find(def)->second)){
-              break;
-            }
-            expire++;
-            used[active[k]->value] = 0;
-          }
-          if(expire > 0){
-            active.erase(active.begin(),active.begin() + expire);
-          }
-
-          auto p = allocated.find(*def);
-          int id = -1;
-          if (p == allocated.end()) {
-            for(int k = 4;k < 13;k++){
-              if(used[k] == 0){
-                id = k;
-                break;
-              }
-            }
-            if(id == -1){
-              //需要spill
-              int active_last = operand2end.find(active[active.size() - 1])->second;
-              int now_last = operand2end.find(def)->second;
-              if(now_last > active_last){
-                spilled_nodes.insert(*def);
-              }
-              else{
-                auto sp_node = active[active.size() - 1];
-                active[active.size() - 1] = def;
-                for(int k = active.size() - 1;k > 0;k--){
-                  if(operand2end.find(active[k])->second < (operand2end.find(active[k - 1])->second)){
-                    auto temp = active[k];
-                    active[k] = active[k - 1];
-                    active[k - 1] = temp;
-                  }
-                }
-                id = sp_node->value;
-                allocated[*def] = id;
-                sp_node->state = MachineOperand::State::Virtual;
-                sp_node->value = alloc.find(sp_node)->second;
-                alloc.erase(sp_node);
-                allocated.erase(*sp_node);
-                spilled_nodes.insert(*sp_node);
-              }
-            }
-            else{
-              //不需要spill,id即可
-              allocated[*def] = id;
-              used[id] = 1;
-              active.push_back(def);
-              for(int k = active.size() - 1;k > 0;k--){
-                if(operand2end.find(active[k])->second < (operand2end.find(active[k - 1])->second)){
-                  auto temp = active[k];
-                  active[k] = active[k - 1];
-                  active[k - 1] = temp;
-                }
-              }
-            }
-          }else {
-            //这里测试，每个def都需要重新分配 //确实如此，这个是白费的
-            //assert(0 == 1);
-            id = p->second;
-          }
-          if(id != -1){
-            def->state = MachineOperand::State::Allocated;
-            alloc.insert(std::make_pair(def,def->value));
-            def->value = id;
-          }         
-        }
-      }
-
-      for(int i = 0;i < dfs.size();i++){
-        auto bb = dfs[i];
-        for (MachineInst *inst = bb->insts.head; inst; inst = inst->next) {
-          auto [def, use] = get_def_use_ptr(inst);
-          for (MachineOperand *oper : use){
-            if (oper->state == MachineOperand::State::Virtual) {
-              auto p = allocated.find(*oper);
-              int id;
-              if (p == allocated.end()) {
-                spilled_nodes.insert(*oper);
-              }else {
-                id = p->second;
-                oper->state = MachineOperand::State::Allocated;
-                alloc.insert(std::make_pair(oper,oper->value));
-                oper->value = id;
-              }
-            }
-          }
-        }
-      }      
-    #endif
-
       if (spilled_nodes.empty()) {
         done = true;
       } else {
         done = false;
-        
-        for(auto iter = alloc.begin();iter != alloc.end();iter++){
-          iter->first->state = MachineOperand::State::Virtual;
-          iter->first->value = iter->second;
-        }
-        
         for (auto &n : spilled_nodes) {
           auto spill = "Spilling v" + std::to_string(n.value);
           dbg(spill);
